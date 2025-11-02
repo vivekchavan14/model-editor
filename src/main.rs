@@ -1,11 +1,88 @@
-use std::io::stdout;
+use std::io::{Write, stdout};
 
-use anyhow::Ok;
-use crossterm::{ExecutableCommand, terminal};
+use crossterm::cursor::MoveTo;
+use crossterm::event;
+use crossterm::{ExecutableCommand, QueueableCommand, event::read, terminal};
+
+enum Actions {
+     MoveUp,
+    MoveDown,
+    MoveLeft,
+    MoveRight,
+}
+
+enum Mode {
+    Normal,
+    Insert,
+}
+
+impl Mode {
+    fn handle_event(&self, ev: event::Event) -> anyhow::Result<Option<Actions>> {
+        match self {
+            Mode::Normal => Ok(handle_normal_event(ev)),
+            Mode::Insert => Ok(handle_insert_event(ev))
+        }
+    }
+}
+
+fn handle_normal_event(ev: event::Event) -> Option<Actions> {
+    match ev {
+        event::Event::Key(key) => match key.code {
+            event::KeyCode::Char('h') => Some(Actions::MoveLeft),
+            event::KeyCode::Char('j') => Some(Actions::MoveDown),
+            event::KeyCode::Char('k') => Some(Actions::MoveUp),
+            event::KeyCode::Char('l') => Some(Actions::MoveRight),
+            _ => None
+        },
+        _ => None
+    }
+}
+
+fn handle_insert_event(ev: event::Event) -> Option<Actions> {
+    match ev {
+        event::Event::Key(key) => match key.code {
+            event::KeyCode::Left => Some(Actions::MoveLeft),
+            event::KeyCode::Down => Some(Actions::MoveDown),
+            event::KeyCode::Up => Some(Actions::MoveUp),
+            event::KeyCode::Right => Some(Actions::MoveRight),
+            _ => None
+        },
+        _ => None
+    }
+}
 
 fn main() -> anyhow::Result<()> {
     let mut stdout = stdout();
+    let mode = Mode::Normal;
+    let mut cx: u16 = 0;
+    let mut cy: u16 = 0;
     terminal::enable_raw_mode()?;
+    stdout.execute(terminal::EnterAlternateScreen)?;
     stdout.execute(terminal::Clear(terminal::ClearType::All))?;
+    loop {
+        stdout.queue(MoveTo(cx, cy))?;
+        stdout.flush()?;
+        
+        match read()? {
+            event::Event::Key(key) => {
+                if let event::KeyCode::Char('q') = key.code {
+                    break;
+                }
+                if let Some(action) = mode.handle_event(event::Event::Key(key))? {
+                    match action {
+                        Actions::MoveLeft if cx > 0 => cx -= 1,
+                        Actions::MoveRight if cx < 79 => cx += 1,
+                        Actions::MoveUp if cy > 0 => cy -= 1,
+                        Actions::MoveDown if cy < 24 => cy += 1,
+                        _ => ()
+                    }
+                }
+            }
+            _ => ()
+        }
+    }
+  
+    stdout.execute(terminal::LeaveAlternateScreen)?;
+    terminal::disable_raw_mode()?;
     Ok(())
 }
