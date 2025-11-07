@@ -3,8 +3,10 @@ use crossterm::event::{Event, KeyCode};
 use crossterm::style::Color;
 use crossterm::{terminal, cursor::MoveTo, style::{Print, SetForegroundColor, SetBackgroundColor, ResetColor}};
 use crossterm::QueueableCommand;
+use log::{debug, info, warn};
 use std::io::Write;
 
+#[derive(Debug)]
 pub enum Actions {
     MoveUp,
     MoveDown,
@@ -101,14 +103,21 @@ impl Editor {
         }
     }
     pub fn apply_action(&mut self, action: Actions) {
+        debug!("Applying action: {:?}", action);
         match action {
             Actions::MoveLeft => {
-                if self.cx > 0 { self.cx -= 1; }
+                if self.cx > 0 { 
+                    self.cx -= 1;
+                    debug!("Moved cursor left to column {}", self.cx);
+                }
             }
             Actions::MoveRight => {
                 if let Ok(line) = self.buffer.get_line(self.cy as usize) {
                     let line_len = line.len() as u16;
-                    if self.cx < line_len { self.cx += 1; }
+                    if self.cx < line_len { 
+                        self.cx += 1;
+                        debug!("Moved cursor right to column {}", self.cx);
+                    }
                 }
             }
             Actions::MoveUp => {
@@ -133,7 +142,10 @@ impl Editor {
                     }
                 }
             }
-            Actions::EnterMode(m) => self.mode = m,
+            Actions::EnterMode(m) => {
+                info!("Switching mode from {:?} to {:?}", self.mode, m);
+                self.mode = m;
+            },
             Actions::PrintChar(c) => {
                 if let Ok(_) = self.buffer.insert_char(self.cy as usize, self.cx as usize, c) {
                     self.cx += 1;
@@ -160,19 +172,29 @@ impl Editor {
                 }
             }
             Actions::Save => {
+                info!("Attempting to save file");
                 match self.buffer.save() {
                     Ok(()) => {
+                        info!("File saved successfully");
                         self.status_message = Some("Saved.".to_string());
                     }
                     Err(e) => {
+                        warn!("Error saving file: {}", e);
                         self.status_message = Some(format!("Error saving file: {}", e));
                     }
                 }
             }
             Actions::SaveAs(path) => {
+                info!("Attempting to save file as: {}", path);
                 match self.buffer.save_as(path) {
-                    Ok(()) => self.status_message = Some("Saved (as).".to_string()),
-                    Err(e) => self.status_message = Some(format!("Error saving file: {}", e)),
+                    Ok(()) => {
+                        info!("File saved successfully");
+                        self.status_message = Some("Saved (as).".to_string());
+                    }
+                    Err(e) => {
+                        warn!("Error saving file: {}", e);
+                        self.status_message = Some(format!("Error saving file: {}", e));
+                    }
                 }
             }
             Actions::DeleteLine => {

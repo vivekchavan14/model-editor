@@ -1,5 +1,6 @@
 use std::io;
 use thiserror::Error;
+use log::{debug, error, info, warn};
 
 #[derive(Error, Debug)]
 pub enum BufferError {
@@ -23,15 +24,22 @@ impl Buffer {
     pub fn from_file(file: Option<String>) -> Result<Self, BufferError> {
         let lines = match &file {
             Some(file_path) => {
+                info!("Opening file: {}", file_path);
                 if !std::path::Path::new(file_path).exists() {
+                    warn!("File not found: {}", file_path);
                     return Err(BufferError::FileNotFound(file_path.clone()));
                 }
-                std::fs::read_to_string(file_path)?
+                let content: Vec<String> = std::fs::read_to_string(file_path)?
                     .lines()
                     .map(|s| s.to_string())
-                    .collect()
+                    .collect();
+                debug!("Read {} lines from file", content.len());
+                content
             }
-            None => vec![String::new()],
+            None => {
+                info!("Creating new empty buffer");
+                vec![String::new()]
+            }
         };
         Ok(Self { file, lines, modified: false })
     }
@@ -124,25 +132,57 @@ impl Buffer {
             .ok_or_else(|| BufferError::FileNotFound("No file path set".to_string()))?;
         
         let content = self.lines.join("\n");
-        std::fs::write(file_path, content)?;
+        std::fs::write(file_path, &content)?;
+        debug!("Successfully saved {} bytes to {}", content.len(), file_path);
         Ok(())
     }
 
     pub fn save_as(&mut self, file_path: String) -> Result<(), BufferError> {
+        info!("Saving as: {}", file_path);
         if std::path::Path::new(&file_path).exists() {
-            std::fs::write(&file_path, self.lines.join("\n"))?;
+            debug!("File exists, overwriting");
+            let content = self.lines.join("\n");
+            std::fs::write(&file_path, &content)?;
+            debug!("Successfully saved {} bytes", content.len());
             self.file = Some(file_path);
+            self.modified = false;
             Ok(())
         } else {
             let parent = std::path::Path::new(&file_path)
                 .parent()
-                .ok_or_else(|| BufferError::FileNotFound("Invalid path".to_string()))?;
+                .ok_or_else(|| {
+                    warn!("Invalid path provided for save_as");
+                    BufferError::FileNotFound("Invalid path".to_string())
+                })?;
             
+            debug!("Creating directory structure: {:?}", parent);
             std::fs::create_dir_all(parent)?;
-            std::fs::write(&file_path, self.lines.join("\n"))?;
+            let content = self.lines.join("\n");
+            std::fs::write(&file_path, &content)?;
+            debug!("Successfully saved {} bytes", content.len());
             self.file = Some(file_path);
             self.modified = false;
             Ok(())
+        }
+    }
+
+    /// Attempts to save any modified changes to a recovery file during a panic
+    pub fn try_save_recovery(&self) {
+        if !self.modified {
+            debug!("Buffer not modified, skipping recovery save");
+            return;
+        }
+
+        let recovery_path = match &self.file {
+            Some(path) => format!("{}.recovery", path),
+            None => ".unnamed.recovery".to_string(),
+        };
+
+        let content = self.lines.join("\n");
+        if let Err(e) = std::fs::write(&recovery_path, &content) {
+            error!("Failed to save recovery file: {}", e);
+        } else {
+            debug!("Recovery file saved: {} ({} bytes)", recovery_path, content.len());
         }
     }
 }

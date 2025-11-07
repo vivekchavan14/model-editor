@@ -7,3 +7,11 @@ edition = "2024"
 anyhow = "1.0.100"
 crossterm = "0.29.0"
 thiserror = "1.0.50"
+log = "0.4"
+env_logger = "0.10"
+chrono = "0.4"
+dirs = "5.0"
+tempfile = { version = "3.8", optional = true }
+
+[dev-dependencies]
+tempfile = "3.8"
