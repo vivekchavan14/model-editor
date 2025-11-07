@@ -14,6 +14,8 @@ pub enum Actions {
     PrintChar(char),
     Backspace,
     NewLine,
+    Save,
+    SaveAs(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,13 +26,21 @@ pub enum Mode {
 
 pub fn handle_normal_event(ev: Event) -> Option<Actions> {
     match ev {
-        Event::Key(key) => match key.code {
-            KeyCode::Char('h') => Some(Actions::MoveLeft),
-            KeyCode::Char('j') => Some(Actions::MoveDown),
-            KeyCode::Char('k') => Some(Actions::MoveUp),
-            KeyCode::Char('l') => Some(Actions::MoveRight),
-            KeyCode::Char('i') => Some(Actions::EnterMode(Mode::Insert)),
-            _ => None,
+        Event::Key(key) => {
+            use crossterm::event::KeyModifiers;
+            match (key.code, key.modifiers) {
+                (KeyCode::Char('h'), KeyModifiers::NONE) => Some(Actions::MoveLeft),
+                (KeyCode::Char('j'), KeyModifiers::NONE) => Some(Actions::MoveDown),
+                (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Actions::MoveUp),
+                (KeyCode::Char('l'), KeyModifiers::NONE) => Some(Actions::MoveRight),
+                (KeyCode::Char('i'), KeyModifiers::NONE) => Some(Actions::EnterMode(Mode::Insert)),
+                (KeyCode::Char('s'), KeyModifiers::CONTROL) => Some(Actions::Save),
+                (KeyCode::Char('S'), KeyModifiers::CONTROL) => {
+                    // For now, just save to a hardcoded path. We'll add proper UI for this later.
+                    Some(Actions::SaveAs("new_file.txt".to_string()))
+                },
+                _ => None,
+            }
         },
         _ => None,
     }
@@ -49,8 +59,10 @@ pub fn handle_insert_event(ev: Event) -> Option<Actions> {
     }
 }
 
+use crate::buffer::Buffer;
+
 pub struct Editor {
-    pub buffer: Vec<String>,
+    pub buffer: Buffer,
     pub cx: u16,
     pub cy: u16,
     pub mode: Mode,
@@ -59,7 +71,16 @@ pub struct Editor {
 impl Editor {
     pub fn new() -> Self {
         Self {
-            buffer: vec![String::new()],
+            buffer: Buffer { file: None, lines: vec![String::new()] },
+            cx: 0,
+            cy: 0,
+            mode: Mode::Normal,
+        }
+    }
+
+    pub fn with_buffer(buffer: Buffer) -> Self {
+        Self {
+            buffer,
             cx: 0,
             cy: 0,
             mode: Mode::Normal,
@@ -77,63 +98,77 @@ impl Editor {
                 if self.cx > 0 { self.cx -= 1; }
             }
             Actions::MoveRight => {
-                let line_len = self.buffer[self.cy as usize].len() as u16;
-                if self.cx < line_len { self.cx += 1; }
+                if let Ok(line) = self.buffer.get_line(self.cy as usize) {
+                    let line_len = line.len() as u16;
+                    if self.cx < line_len { self.cx += 1; }
+                }
             }
             Actions::MoveUp => {
                 if self.cy > 0 {
                     self.cy -= 1;
-                    let line_len = self.buffer[self.cy as usize].len() as u16;
-                    if self.cx > line_len {
-                        self.cx = line_len;
+                    if let Ok(line) = self.buffer.get_line(self.cy as usize) {
+                        let line_len = line.len() as u16;
+                        if self.cx > line_len {
+                            self.cx = line_len;
+                        }
                     }
                 }
             }
             Actions::MoveDown => {
                 if (self.cy as usize) + 1 < self.buffer.len() {
                     self.cy += 1;
-                    let line_len = self.buffer[self.cy as usize].len() as u16;
-                    if self.cx > line_len {
-                        self.cx = line_len;
+                    if let Ok(line) = self.buffer.get_line(self.cy as usize) {
+                        let line_len = line.len() as u16;
+                        if self.cx > line_len {
+                            self.cx = line_len;
+                        }
                     }
                 }
             }
             Actions::EnterMode(m) => self.mode = m,
             Actions::PrintChar(c) => {
-                let line = &mut self.buffer[self.cy as usize];
-                let idx = self.cx as usize;
-                if idx <= line.len() {
-                    line.insert(idx, c);
+                if let Ok(_) = self.buffer.insert_char(self.cy as usize, self.cx as usize, c) {
                     self.cx += 1;
                 }
             }
             Actions::Backspace => {
                 if self.cx > 0 {
-                    let line = &mut self.buffer[self.cy as usize];
-                    line.remove((self.cx - 1) as usize);
-                    self.cx -= 1;
+                    if let Ok(_) = self.buffer.remove_char(self.cy as usize, (self.cx - 1) as usize) {
+                        self.cx -= 1;
+                    }
                 } else if self.cy > 0 {
-                    let cur = self.buffer.remove(self.cy as usize);
-                    self.cy -= 1;
-                    let prev = &mut self.buffer[self.cy as usize];
-                    let prev_len = prev.len() as u16;
-                    prev.push_str(&cur);
-                    self.cx = prev_len;
+                    if let Ok(prev_line_len) = self.buffer.join_with_previous_line(self.cy as usize) {
+                        self.cy -= 1;
+                        self.cx = prev_line_len as u16;
+                    }
                 }
             }
             Actions::NewLine => {
-                let line = &mut self.buffer[self.cy as usize];
-                let tail = line.split_off(self.cx as usize);
-                self.buffer.insert((self.cy + 1) as usize, tail);
-                self.cy += 1;
-                self.cx = 0;
+                if let Ok(line) = self.buffer.get_line_mut(self.cy as usize) {
+                    let tail = line.split_off(self.cx as usize);
+                    self.buffer.lines.insert((self.cy + 1) as usize, tail);
+                    self.cy += 1;
+                    self.cx = 0;
+                }
+            }
+            Actions::Save => {
+                if let Err(e) = self.buffer.save() {
+                    // TODO: Show error in status line
+                    eprintln!("Error saving file: {}", e);
+                }
+            }
+            Actions::SaveAs(path) => {
+                if let Err(e) = self.buffer.save_as(path) {
+                    // TODO: Show error in status line
+                    eprintln!("Error saving file: {}", e);
+                }
             }
         }
     }
     pub fn render(&self, stdout: &mut impl Write) -> Result<()> {
         let (w, h) = terminal::size()?;
         stdout.queue(terminal::Clear(terminal::ClearType::All))?;
-        for (i, line) in self.buffer.iter().enumerate() {
+        for (i, line) in self.buffer.lines.iter().enumerate() {
             if i as u16 >= h.saturating_sub(1) { break; }
             stdout.queue(MoveTo(0, i as u16))?;
             stdout.queue(Print(line))?;
@@ -142,7 +177,7 @@ impl Editor {
             Mode::Normal => "NORMAL",
             Mode::Insert => "INSERT",
         };
-        let filename = "src/main.rs"; // Placeholder
+        let filename = self.buffer.display_name();
         let line = (self.cy + 1).to_string();
         let col = (self.cx + 1).to_string();
         let percent = if self.buffer.len() <= 1 {
