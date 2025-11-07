@@ -7,12 +7,16 @@ use crossterm::{terminal, ExecutableCommand};
 mod editor;
 use editor::{Editor, Mode};
 
+mod buffer;
+
 fn main() -> Result<()> {
     let mut stdout = stdout();
     terminal::enable_raw_mode()?;
     stdout.execute(terminal::EnterAlternateScreen)?;
 
-    let mut editor = Editor::new();
+    let file = std::env::args().nth(1);
+    let buffer = buffer::Buffer::from_file(file)?;
+    let mut editor = Editor::with_buffer(buffer);
     editor.render(&mut stdout)?;
 
     'outer: loop {
